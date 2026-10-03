@@ -32,3 +32,9 @@ mybatis-plus:
 logging:
   level:
     com.evops: INFO
+
+# 冷链 V5 温控预警定时扫描（fixedDelay：上一轮结束后再计时；重启后靠 dedup 唯一键不多写）
+cold-chain:
+  warning-scan:
+    initial-delay-ms: 10000
+    fixed-delay-ms: 300000

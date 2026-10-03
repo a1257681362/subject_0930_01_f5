@@ -63,6 +63,10 @@ public class TransportBatch extends BaseEntity {
     /** 当前责任主体（驾驶员/接收人等具体责任人） */
     private String responsibleParty;
 
+    // —— V5 按药品类别的温控预警：派车时冗余类别，解析后的阈值明细固化在 t_cc_batch_warning_threshold_snap ——
+    /** 派车时药品所属类别；无类别的历史批次为空，不启用类别预警 */
+    private Long categoryId;
+
     public String getBatchNo() { return batchNo; }
     public void setBatchNo(String batchNo) { this.batchNo = batchNo; }
     public Long getOrderId() { return orderId; }
@@ -133,4 +137,6 @@ public class TransportBatch extends BaseEntity {
     public void setResponsibleOrg(String responsibleOrg) { this.responsibleOrg = responsibleOrg; }
     public String getResponsibleParty() { return responsibleParty; }
     public void setResponsibleParty(String responsibleParty) { this.responsibleParty = responsibleParty; }
+    public Long getCategoryId() { return categoryId; }
+    public void setCategoryId(Long categoryId) { this.categoryId = categoryId; }
 }

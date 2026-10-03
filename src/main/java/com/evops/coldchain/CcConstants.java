@@ -62,6 +62,10 @@ public final class CcConstants {
     public static final String ENT_HANDOVER = "HANDOVER";
     public static final String ENT_SEAL = "SEAL";
     public static final String ENT_PERMISSION = "PERMISSION";
+    // 药品类别 / 预警模板 / 温度预警
+    public static final String ENT_CATEGORY = "DRUG_CATEGORY";
+    public static final String ENT_WARNING_TEMPLATE = "WARNING_TEMPLATE";
+    public static final String ENT_WARNING = "TEMP_WARNING";
 
     // 校准凭证状态（VALID 有效 / VOID 作废；只追加 void* 字段，不删除原行）
     public static final String CERT_VALID = "VALID";
@@ -111,4 +115,18 @@ public final class CcConstants {
     public static final String ACT_PERMISSION_RESTORE = "PERMISSION_RESTORE";
     // 一车货到达中转仓（交接前一个运输节点，登记到仓总箱数作为分箱平衡基准）
     public static final String ACT_ARRIVE = "ARRIVE";
+    // 按药品类别的温控预警模板（V5）：类别建档/停用、模板维护（追加版本）、
+    // 批次派车固化阈值快照、定时/手工按采样点扫描出预警、管理员查询与导出
+    public static final String ACT_CATEGORY_CREATE = "CATEGORY_CREATE";
+    public static final String ACT_CATEGORY_REVOKE = "CATEGORY_REVOKE";
+    public static final String ACT_TEMPLATE_MAINTAIN = "WARNING_TEMPLATE_MAINTAIN";
+    public static final String ACT_WARNING_SCAN = "WARNING_SCAN";
+    public static final String ACT_WARNING_EXPORT = "WARNING_EXPORT";
+
+    // 温度预警方向：连续超上限 / 连续低下限
+    public static final String WARNING_HIGH = "TEMP_HIGH";
+    public static final String WARNING_LOW = "TEMP_LOW";
+
+    // Shiro 角色：仅管理员可维护模板、查看与导出温度预警
+    public static final String ROLE_ADMIN = "ADMIN";
 }

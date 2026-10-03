@@ -14,3 +14,10 @@ mybatis-plus:
   type-aliases-package: com.evops
   configuration:
     map-underscore-to-camel-case: true
+
+# 测试环境关闭定时扫描的自动触发（首轮延迟/周期都拉长到 1 天）：
+# 扫描由测试按确定节奏手工/直调触发，模拟“定时任务重启”即重复调用同一扫描入口
+cold-chain:
+  warning-scan:
+    initial-delay-ms: 86400000
+    fixed-delay-ms: 86400000

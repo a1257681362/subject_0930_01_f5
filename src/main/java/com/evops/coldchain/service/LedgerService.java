@@ -64,6 +64,8 @@ public class LedgerService {
     @Resource
     private PermissionService permissionService;
     @Resource
+    private WarningTemplateService warningTemplateService;
+    @Resource
     private OpLogService opLogService;
 
     public Map<String, Object> batchLedger(Long batchId) {
@@ -158,6 +160,12 @@ public class LedgerService {
         handoverInfo.put("coldChainPermissionPermitted",
                 permissionService.isPermitted(CcConstants.PERM_COLD_CHAIN_HANDOVER));
         ledger.put("handovers", handoverInfo);
+        // V5 类别温控预警阈值快照（派车时固化；预警记录本身仅管理员可查/导出，不在此开放）
+        com.evops.coldchain.entity.BatchWarningThresholdSnap warningSnap =
+                warningTemplateService.getSnapshotByBatch(batchId);
+        if (warningSnap != null) {
+            ledger.put("warningThresholdSnapshot", warningSnap);
+        }
         ledger.put("opLogs", opLogs);
         return ledger;
     }

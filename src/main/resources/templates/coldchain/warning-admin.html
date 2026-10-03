@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>按药品类别的温控预警模板</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; margin: 0; background: #f4f6f9; color: #263238; }
+        header { background: #1565c0; color: #fff; padding: 14px 24px; font-size: 18px; font-weight: bold; }
+        main { max-width: 1360px; margin: 18px auto; padding: 0 16px; }
+        section { background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.08); padding: 16px 20px; margin-bottom: 18px; }
+        h2 { font-size: 16px; margin: 0 0 12px; padding-left: 8px; border-left: 4px solid #1565c0; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th, td { border: 1px solid #e0e0e0; padding: 6px 8px; text-align: left; vertical-align: top; }
+        th { background: #eef3fb; white-space: nowrap; }
+        form.inline { display: inline; }
+        .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px 14px; }
+        .grid label { display: flex; flex-direction: column; font-size: 12px; color: #546e7a; gap: 3px; }
+        input, select, textarea { padding: 5px 7px; border: 1px solid #b0bec5; border-radius: 4px; font-size: 13px; }
+        button { padding: 5px 12px; border: none; border-radius: 4px; background: #1565c0; color: #fff; cursor: pointer; font-size: 12px; }
+        button.ghost { background: #607d8b; }
+        button.danger { background: #c62828; }
+        .tag { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; }
+        .tag.ok { background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7; }
+        .tag.bad { background: #ffebee; color: #c62828; border: 1px solid #ef9a9a; }
+        .tag.inherit { background: #f3e5f5; color: #6a1b9a; border: 1px solid #ce93d8; }
+        .muted { color: #78909c; font-size: 12px; }
+        .msg { margin: 8px 0; font-size: 13px; white-space: pre-wrap; }
+        .msg.ok { color: #2e7d32; }
+        .msg.err { color: #c62828; }
+        details { margin-top: 4px; }
+        summary { cursor: pointer; color: #1565c0; font-size: 12px; }
+        .detail { font-size: 12px; color: #455a64; }
+    </style>
+</head>
+<body>
+<header>冷链 V5 · 按药品类别的温控预警模板（仅管理员）</header>
+<main>
+
+    <section>
+        <h2>药品类别建档（可挂父类别形成继承树；阈值留空即沿父链继承）</h2>
+        <form id="categoryForm" class="grid">
+            <label>类别名称*<input name="categoryName" required></label>
+            <label>父类别（不选为根类别）<select name="parentId" id="parentSelect"><option value="">根类别</option></select></label>
+            <label style="grid-column: span 2;">备注<input name="remark"></label>
+            <div style="grid-column: span 4;">
+                <button type="submit">建档</button>
+                <button type="button" class="ghost" onclick="revokeCategory()">停用所选类别</button>
+                <span class="muted">类别只停用不删除，历史模板版本与已建批次阈值快照仍可追溯</span>
+            </div>
+        </form>
+        <div id="categoryFormMsg" class="msg"></div>
+    </section>
+
+    <section>
+        <h2>维护类别温控预警模板（每次维护追加新版本，旧版本封存；只影响此后新建批次）</h2>
+        <form id="templateForm" class="grid">
+            <label>类别*<select name="categoryId" id="tplCategory" required></select></label>
+            <label>预警温区下限℃（空=继承上级）<input name="tempMin" type="number" step="0.01"></label>
+            <label>预警温区上限℃（空=继承上级）<input name="tempMax" type="number" step="0.01"></label>
+            <label>连续超限缓冲分钟（空=继承上级）<input name="warnBufferMinutes" type="number" min="0"></label>
+            <label>抖动合并缺口分钟（空=继承上级）<input name="jitterGapMinutes" type="number" min="0"></label>
+            <label style="grid-column: span 3;">变更原因<input name="changeReason" placeholder="如 夏季高温提高上限，缓冲按最新药典调整"></label>
+            <div style="grid-column: span 4;">
+                <button type="submit">发布新版本</button>
+                <span class="muted">字段级继承：可只填需要覆盖的字段；父链缺字段且本类未覆盖时会被拒绝并提示缺哪几项</span>
+            </div>
+        </form>
+        <div id="templateFormMsg" class="msg"></div>
+    </section>
+
+    <section>
+        <h2>类别与当前生效模板</h2>
+        <table>
+            <thead>
+            <tr>
+                <th>ID</th><th>类别编号</th><th>类别全路径</th><th>状态</th><th>当前版本</th>
+                <th>版本原始温区℃<br><span class="muted">空=继承</span></th>
+                <th>生效温区℃<br><span class="muted">继承合并后</span></th>
+                <th>缓冲/抖动(分钟)</th><th>继承/覆盖明细</th><th>历史版本</th>
+            </tr>
+            </thead>
+            <tbody id="categoryBody"></tbody>
+        </table>
+    </section>
+
+    <section>
+        <h2>温度预警（按采样点连续超限 + 抖动合并产生；只追加，模板变更不会使其消失）</h2>
+        <p>
+            <button type="button" onclick="scanNow()">手工触发全量扫描</button>
+            <button type="button" class="ghost" onclick="window.open('/api/cold-chain/admin/warnings/export','_blank')">导出全部 CSV</button>
+            <button type="button" class="ghost" onclick="loadWarnings()">刷新列表</button>
+            <span class="muted">查询/导出均经 Shiro 管理员角色校验；导出逐次写审计流水</span>
+        </p>
+        <div id="scanMsg" class="msg"></div>
+        <table>
+            <thead>
+            <tr>
+                <th>ID</th><th>批次</th><th>采样点探头</th><th>类型</th><th>模板版本</th>
+                <th>起始时间</th><th>触发时间</th><th>连续超限(分钟)</th><th>温度℃</th><th>操作者</th><th>产生时间</th><th>描述</th>
+            </tr>
+            </thead>
+            <tbody id="warningBody"></tbody>
+        </table>
+    </section>
+
+</main>
+
+<script>
+    var API = '/api/cold-chain/admin';
+    var categories = [];
+
+    function show(id, text, ok) {
+        var el = document.getElementById(id);
+        el.textContent = text;
+        el.className = 'msg ' + (ok ? 'ok' : 'err');
+    }
+
+    function postJson(path, data) {
+        return fetch(API + path, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            credentials: 'same-origin',
+            body: JSON.stringify(data || {})
+        }).then(handleResp);
+    }
+
+    function getJson(path) {
+        return fetch(API + path, {credentials: 'same-origin'}).then(handleResp);
+    }
+
+    // 非管理员会被 Shiro 过滤器挡在控制器外（401/403 为容器错误页，非 JSON），统一转成失败消息
+    function handleResp(r) {
+        if (r.status === 401) { return Promise.resolve({success: false, message: '未认证（401），请用管理员账号登录'}); }
+        if (r.status === 403) { return Promise.resolve({success: false, message: '仅管理员可操作（403）'}); }
+        return r.json();
+    }
+
+    function fmt(v) { return v === null || v === undefined ? '<span class="tag inherit">继承</span>' : v; }
+    function esc(s) {
+        if (s === null || s === undefined) { return ''; }
+        return String(s).replace(/[&<>"]/g, function (c) {
+            return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c];
+        });
+    }
+
+    function fillCategorySelects() {
+        var parentSel = document.getElementById('parentSelect');
+        var tplSel = document.getElementById('tplCategory');
+        parentSel.innerHTML = '<option value="">根类别</option>';
+        tplSel.innerHTML = '';
+        categories.forEach(function (c) {
+            var disabled = c.category.status === 'REVOKED' ? ' disabled' : '';
+            parentSel.insertAdjacentHTML('beforeend',
+                '<option value="' + c.category.id + '"' + disabled + '>' + esc(c.path) + '</option>');
+            tplSel.insertAdjacentHTML('beforeend',
+                '<option value="' + c.category.id + '"' + disabled + '>' + esc(c.path)
+                    + (disabled ? '（已停用）' : '') + '</option>');
+        });
+    }
+
+    function loadCategories() {
+        getJson('/categories').then(function (resp) {
+            if (!resp.success) { show('categoryFormMsg', '加载类别失败：' + resp.message, false); return; }
+            categories = resp.data;
+            fillCategorySelects();
+            var body = document.getElementById('categoryBody');
+            body.innerHTML = '';
+            categories.forEach(function (c) {
+                var v = c.effectiveVersion;
+                var statusTag = c.category.status === 'ACTIVE'
+                    ? '<span class="tag ok">ACTIVE</span>'
+                    : '<span class="tag bad">REVOKED</span>';
+                var history = c.versions.map(function (ver) {
+                    return 'V' + ver.versionNo + '[' + ver.status + '] 下限=' + (ver.tempMin === null ? '继承' : ver.tempMin)
+                        + ' 上限=' + (ver.tempMax === null ? '继承' : ver.tempMax)
+                        + ' 缓冲=' + (ver.warnBufferMinutes === null ? '继承' : ver.warnBufferMinutes)
+                        + ' 抖动=' + (ver.jitterGapMinutes === null ? '继承' : ver.jitterGapMinutes);
+                }).join('\n');
+                var tr = document.createElement('tr');
+                tr.innerHTML =
+                    '<td>' + c.category.id + '</td>'
+                    + '<td>' + esc(c.category.categoryNo) + '</td>'
+                    + '<td>' + esc(c.path) + '</td>'
+                    + '<td>' + statusTag + '</td>'
+                    + '<td>' + (v ? 'V' + v.versionNo : '<span class="tag bad">未配置</span>') + '</td>'
+                    + '<td>' + (v ? fmt(v.tempMin) + ' ~ ' + fmt(v.tempMax) : '-') + '</td>'
+                    + '<td>' + (c.resolved ? c.resolved.tempMin + ' ~ ' + c.resolved.tempMax : '-') + '</td>'
+                    + '<td>' + (v ? fmt(v.warnBufferMinutes) + ' / ' + fmt(v.jitterGapMinutes)
+                                 + (c.resolved ? '<div class="muted">生效:' + c.resolved.warnBufferMinutes
+                                     + ' / ' + c.resolved.jitterGapMinutes + '</div>' : '')
+                             : '-') + '</td>'
+                    + '<td class="detail">' + (c.resolved ? esc(c.resolved.inheritanceDetail) : '-') + '</td>'
+                    + '<td><details><summary>' + c.versions.length + ' 个版本</summary><pre class="detail">'
+                      + esc(history) + '</pre></details></td>';
+                body.appendChild(tr);
+            });
+        });
+    }
+
+    function formJson(form) {
+        var data = {};
+        new FormData(form).forEach(function (v, k) { if (v !== '') { data[k] = v; } });
+        ['parentId', 'categoryId'].forEach(function (k) {
+            if (data[k] !== undefined) { data[k] = Number(data[k]); }
+        });
+        ['tempMin', 'tempMax'].forEach(function (k) {
+            if (data[k] !== undefined) { data[k] = Number(data[k]); }
+        });
+        ['warnBufferMinutes', 'jitterGapMinutes'].forEach(function (k) {
+            if (data[k] !== undefined) { data[k] = Number(data[k]); }
+        });
+        return data;
+    }
+
+    document.getElementById('categoryForm').addEventListener('submit', function (e) {
+        e.preventDefault();
+        postJson('/categories', formJson(this)).then(function (resp) {
+            if (resp.success) {
+                show('categoryFormMsg', '类别建档成功：' + resp.data.categoryNo, true);
+                loadCategories();
+            } else { show('categoryFormMsg', '被拦截：' + resp.message, false); }
+        });
+    });
+
+    function revokeCategory() {
+        var id = document.getElementById('parentSelect').value;
+        if (!id) { show('categoryFormMsg', '请先在父类别下拉中选择要停用的类别', false); return; }
+        var reason = prompt('请输入停用原因：');
+        if (!reason) { return; }
+        postJson('/categories/' + id + '/revoke?reason=' + encodeURIComponent(reason)).then(function (resp) {
+            if (resp.success) { show('categoryFormMsg', '类别已停用（历史模板保留）', true); loadCategories(); }
+            else { show('categoryFormMsg', '停用被拦截：' + resp.message, false); }
+        });
+    }
+
+    document.getElementById('templateForm').addEventListener('submit', function (e) {
+        e.preventDefault();
+        postJson('/warning-templates', formJson(this)).then(function (resp) {
+            if (resp.success) {
+                show('templateFormMsg', '模板新版本发布成功：V' + resp.data.versionNo, true);
+                loadCategories();
+            } else { show('templateFormMsg', '被拦截：' + resp.message, false); }
+        });
+    });
+
+    function scanNow() {
+        postJson('/warnings/scan', {}).then(function (resp) {
+            if (resp.success) {
+                show('scanMsg', '扫描完成：扫描批次=' + resp.data.scannedBatches
+                    + '，新增预警=' + resp.data.inserted + '，去重跳过=' + resp.data.duplicated, true);
+                loadWarnings();
+            } else { show('scanMsg', '扫描失败：' + resp.message, false); }
+        });
+    }
+
+    function loadWarnings() {
+        getJson('/warnings').then(function (resp) {
+            if (!resp.success) { show('scanMsg', '加载预警失败：' + resp.message, false); return; }
+            var body = document.getElementById('warningBody');
+            body.innerHTML = '';
+            resp.data.forEach(function (w) {
+                var typeTag = w.warningType === 'TEMP_HIGH'
+                    ? '<span class="tag bad">超上限</span>'
+                    : '<span class="tag" style="background:#e3f2fd;color:#1565c0;border:1px solid #90caf9;">低下限</span>';
+                var tr = document.createElement('tr');
+                tr.innerHTML =
+                    '<td>' + w.id + '</td>'
+                    + '<td>' + w.batchId + '</td>'
+                    + '<td>' + (w.probeId === null ? '历史批次' : w.probeId) + '</td>'
+                    + '<td>' + typeTag + '</td>'
+                    + '<td>V' + w.templateVersionNo + '</td>'
+                    + '<td>' + (w.startTime || '').replace('T', ' ') + '</td>'
+                    + '<td>' + (w.endTime || '').replace('T', ' ') + '</td>'
+                    + '<td>' + w.durationMinutes + '</td>'
+                    + '<td>' + w.startTemperature + ' → ' + w.endTemperature + '</td>'
+                    + '<td>' + esc(w.operator) + '</td>'
+                    + '<td>' + (w.createTime || '').replace('T', ' ') + '</td>'
+                    + '<td class="detail">' + esc(w.description) + '</td>';
+                body.appendChild(tr);
+            });
+        });
+    }
+
+    loadCategories();
+    loadWarnings();
+</script>
+</body>
+</html>

@@ -33,16 +33,23 @@ public class DrugService {
     private SequenceMapper sequenceMapper;
     @Resource
     private OpLogService opLogService;
+    @Resource
+    private DrugCategoryService categoryService;
 
     @Transactional
     public Drug create(DrugCreateRequest req) {
         validateRange(req.getTempMin(), req.getTempMax());
+        // V5：药品可挂到类别树；停用类别下不允许再建药品
+        if (req.getCategoryId() != null) {
+            categoryService.requireActiveCategory(req.getCategoryId());
+        }
 
         Drug drug = new Drug();
         drug.setDrugNo("YP" + sequenceMapper.nextDrugNo());
         drug.setDrugName(req.getDrugName());
         drug.setCurrentVersion(1);
         drug.setStatus(CcConstants.ACTIVE);
+        drug.setCategoryId(req.getCategoryId());
         drug.setRemark(req.getRemark());
         drugMapper.insert(drug);
 
@@ -57,9 +64,11 @@ public class DrugService {
         versionMapper.insert(v1);
 
         opLogService.log(CcConstants.ENT_DRUG, drug.getId(), null, CcConstants.ACT_CREATE,
-                String.format("药品建档：%s(%s) V1，批准文号=%s，温区=%s~%s℃，包装=%s",
+                String.format("药品建档：%s(%s) V1，批准文号=%s，温区=%s~%s℃，包装=%s%s",
                         drug.getDrugName(), drug.getDrugNo(), req.getApprovalNo(),
-                        req.getTempMin(), req.getTempMax(), req.getPackageSpec()));
+                        req.getTempMin(), req.getTempMax(), req.getPackageSpec(),
+                        req.getCategoryId() == null ? ""
+                                : "，所属药品类别=" + categoryService.categoryPath(req.getCategoryId())));
         return drug;
     }
 

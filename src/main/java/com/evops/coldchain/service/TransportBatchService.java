@@ -9,6 +9,7 @@ import com.evops.coldchain.dto.RevokeRequest;
 import com.evops.coldchain.dto.SignRequest;
 import com.evops.coldchain.dto.TempReportRequest;
 import com.evops.coldchain.entity.DrugVersion;
+import com.evops.coldchain.entity.BatchWarningThresholdSnap;
 import com.evops.coldchain.entity.ExceptionEvent;
 import com.evops.coldchain.entity.ExceptionEvidence;
 import com.evops.coldchain.entity.RouteSegmentSnap;
@@ -74,6 +75,8 @@ public class TransportBatchService {
     @Resource
     private PermissionService permissionService;
     @Resource
+    private WarningTemplateService warningTemplateService;
+    @Resource
     private OpLogService opLogService;
 
     /** 派车：生成稳定批次号，固化档案快照，关联发货单与车辆 */
@@ -94,6 +97,10 @@ public class TransportBatchService {
             routeService.requireActiveRoute(req.getRouteId());
         }
 
+        // V5：药品所属类别（建药品时确定）。派车瞬间解析类别模板继承链并固化阈值快照：
+        // 模板之后维护只影响此后新建批次，本批次预警扫描永远用这份快照。
+        Long categoryId = drugService.requireDrug(order.getDrugId()).getCategoryId();
+
         TransportBatch batch = new TransportBatch();
         batch.setBatchNo(generateBatchNo());
         batch.setOrderId(order.getId());
@@ -107,6 +114,8 @@ public class TransportBatchService {
         batch.setPackageSpecSnap(version.getPackageSpec());
         // 路线引用（季节版本与分段在发运时才选定并快照，故此处 version* 留空）
         batch.setRouteId(req.getRouteId());
+        // 类别预警：冗余类别，阈值明细逐字段固化到 t_cc_batch_warning_threshold_snap
+        batch.setCategoryId(categoryId);
         // 运输信息
         batch.setReceiverOrg(order.getReceiverOrg());
         batch.setShipQty(order.getShipQty());
@@ -115,17 +124,27 @@ public class TransportBatchService {
         batch.setStatus(CcConstants.BATCH_DISPATCHED);
         batchMapper.insert(batch);
 
+        // 类别阈值快照只在批次创建（派车）时固化一次；无类别的历史药品批次返回 null，不走类别预警
+        BatchWarningThresholdSnap warningSnap = warningTemplateService.snapshotForBatch(batch.getId(), categoryId);
+
         // 发货单同步为已派车
         order.setStatus(CcConstants.ORDER_DISPATCHED);
         orderMapper.updateById(order);
 
         opLogService.log(CcConstants.ENT_BATCH, batch.getId(), batch.getId(), CcConstants.ACT_DISPATCH,
-                String.format("批次 %s 派车：发货单=%s，车辆=%s，按档案 V%d 快照（批准文号=%s，温区=%s~%s℃，包装=%s）%s",
+                String.format("批次 %s 派车：发货单=%s，车辆=%s，按档案 V%d 快照（批准文号=%s，温区=%s~%s℃，包装=%s）%s%s",
                         batch.getBatchNo(), order.getOrderNo(), vehicle.getPlateNo(),
                         version.getVersionNo(), version.getApprovalNo(),
                         version.getTempMin(), version.getTempMax(), version.getPackageSpec(),
                         req.getRouteId() == null ? ""
-                                : "；已指定运输路线，温区分段版本将在发运时按当时季节选定并逐段快照"));
+                                : "；已指定运输路线，温区分段版本将在发运时按当时季节选定并逐段快照",
+                        warningSnap == null ? ""
+                                : String.format("；按药品类别[%s]固化温控预警阈值快照（模板 V%d，预警温区=%s~%s℃，连续超限缓冲=%d分钟，抖动合并=%d分钟：%s），此后模板维护不影响本批次",
+                                        warningSnap.getCategoryPathSnap(), warningSnap.getTemplateVersionNo(),
+                                        warningSnap.getTempMinSnap(), warningSnap.getTempMaxSnap(),
+                                        warningSnap.getWarnBufferMinutesSnap(),
+                                        warningSnap.getJitterGapMinutesSnap(),
+                                        warningSnap.getInheritanceDetail())));
         return batch;
     }
 

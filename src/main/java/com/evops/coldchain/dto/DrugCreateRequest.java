@@ -16,6 +16,8 @@ public class DrugCreateRequest {
     private BigDecimal tempMax;
     @NotBlank(message = "包装规格不能为空")
     private String packageSpec;
+    /** 所属药品类别ID（V5）：不填则该药品不启用按类别继承的温控预警 */
+    private Long categoryId;
     private String remark;
 
     public String getDrugName() { return drugName; }
@@ -28,6 +30,8 @@ public class DrugCreateRequest {
     public void setTempMax(BigDecimal tempMax) { this.tempMax = tempMax; }
     public String getPackageSpec() { return packageSpec; }
     public void setPackageSpec(String packageSpec) { this.packageSpec = packageSpec; }
+    public Long getCategoryId() { return categoryId; }
+    public void setCategoryId(Long categoryId) { this.categoryId = categoryId; }
     public String getRemark() { return remark; }
     public void setRemark(String remark) { this.remark = remark; }
 }

@@ -41,7 +41,7 @@ V2 另增路线温区分段四张表（见下节）与 `seq_cc_route_no` 序列�
 ### 接口（均在 `/api/cold-chain` 下，HTTP Basic 认证）
 
 内置账号：`dispatcher/dispatcher123`（调度）、`carrier/carrier123`（在途）、
-`receiver/receiver123`（签收）、`bootstrap/bootstrap`。
+`receiver/receiver123`（签收）、`admin/admin123`（管理员，V5 起）、`bootstrap/bootstrap`。
 
 | 动作 | 方法与路径 |
 | --- | --- |
@@ -307,3 +307,102 @@ curl -u dispatcher:dispatcher123 -H 'Content-Type: application/json' \
 权限收紧后建单/核验/提交/签收全部停止、页面显示收紧横幅但已确认封签事实保留、恢复后无需重核；
 作废释放箱数占用但封签/核验事实保留、封签号不可复用。
 
+
+## 冷链运输 V5：按药品类别的温控预警模板
+
+在 V1~V4 台账上增加按药品类别维护的温控预警模板：类别成树，子类阈值留空即沿父链继承、
+也能在指定温区/参数上覆盖；模板维护只影响此后新建批次，旧批次继续使用创建时快照；
+系统按采样点重放温度计算连续超限时长，短暂抖动按缺口合并；预警只追加，模板变更不会让
+已产生的预警消失；模板维护、预警查看与导出全部经 Shiro 管理员角色校验。
+
+### 核心规则
+
+- **类别成树、字段级继承**：`t_cc_drug_category` 自引用成树（根->子->具体种类），类别只停用不删除。
+  每个类别可维护追加式模板版本，四个阈值字段（温区下限/上限、连续超限缓冲分钟、抖动合并缺口分钟）
+  均可留空：**留空=沿父类链向上找最近非空值继承，填值=本类覆盖**，逐字段独立（可只覆盖上限）。
+  维护时父链缺字段且本类未覆盖会被拒绝并指明缺哪几项；继承合并后温区倒置同样拦截。
+- **模板版本只追加**：每次维护旧 EFFECTIVE 版本置 SUPERSEDED、新版本 EFFECTIVE，历史版本行原值不改。
+- **派车固化阈值快照**：药品建档时挂类别；**派车瞬间**把继承合并后的最终阈值（含类别信息、锚点版本、
+  逐字段来源说明）逐字段快照到 `t_cc_batch_warning_threshold_snap`。模板之后维护**只影响新建批次**，
+  旧批次扫描、追溯、导出永远用创建时快照；类别树全未配置模板的挂类别药品，派车直接拦截。
+- **按采样点连续超限 + 抖动合并**：扫描按“批次 × 探头（采样点）”沿 record_time 重放温度序列，区分
+  超上限/低下限两个方向：同方向两次越限间夹着的回温采样，缺口 ≤ 抖动合并分钟数则合并为同一段
+  （段起点不变）；缺口超过抖动窗口才切断另起新段；两次越限间没有正常采样（稀疏上报）不断连续。
+  合并后连续超限时长 ≥ 缓冲阈值才出一条预警，同一段只出一条；反方向越限另起一段。
+- **预警只追加、模板变更不消失**：`t_cc_temp_warning` 只 INSERT，无更新/删除路径；以
+  `批次|采样点|方向|段起点` 为 `dedup_key` 唯一约束兜底，定时任务**重启/并发重复扫描只跳过不多写**，
+  每条独立事务提交。预警带操作者快照：定时扫描 `system`（create_by=0）、手工触发为登录管理员。
+- **Shiro 管理员校验**：模板维护、手工扫描、预警列表/批次筛选、CSV 导出、管理页面统一挂
+  `authcBasic,adminRoleFilter`（`/api/cold-chain/admin/**`、`/ui/cold-chain/warning-admin`）；
+  匿名 401、已认证非管理员 403。导出逐次写 `WARNING_EXPORT` 流水。
+- **定时任务**：`AlertScanJob` 每 5 分钟（fixedDelay 可配）全量重放；单轮异常不影响下一轮。
+  无类别历史批次不走类别预警，仍按 V1 档案温区自动开温度异常，两条机制并存互不影响。
+- 类别建档/停用、模板维护、手工扫描、导出均写 `t_cc_op_log`（实体类型
+  `DRUG_CATEGORY` / `WARNING_TEMPLATE` / `TEMP_WARNING`，批次预警带 batch_id 追溯）。
+
+### 表结构增量（详见 schema.sql，版本标记 `cold-chain-5`）
+
+- 新增 `t_cc_drug_category`（类别树）、`t_cc_warning_template_version`（追加式模板版本，空字段=继承）、
+  `t_cc_batch_warning_threshold_snap`（派车阈值快照，批次唯一）、`t_cc_temp_warning`（预警，dedup 唯一）、
+  序列 `seq_cc_category_no`（类别编号 `LB+8位`）。
+- `t_cc_drug` 增 `category_id`；`t_cc_transport_batch` 增 `category_id`（阈值明细在快照表）。
+
+### 接口增量（`/api/cold-chain/admin/**`，仅 `admin/admin123` 管理员）
+
+| 动作 | 方法与路径 |
+| --- | --- |
+| 药品类别建档（可挂父类别） | `POST /admin/categories` |
+| 停用类别（不删除） | `POST /admin/categories/{id}/revoke?reason=` |
+| 类别树 + 生效模板 + 继承解析 | `GET /admin/categories` |
+| 维护模板（追加新版本，空字段=继承） | `POST /admin/warning-templates` |
+| 类别模板历史版本 | `GET /admin/warning-templates/{categoryId}/versions` |
+| 预警列表（可按批次筛选） | `GET /admin/warnings?batchId=` |
+| 手工触发全量扫描（重启安全） | `POST /admin/warnings/scan` |
+| 导出预警 CSV（逐次留痕） | `GET /admin/warnings/export?batchId=` |
+| 管理页面 | `GET /ui/cold-chain/warning-admin`（仅管理员） |
+
+建档药品时携带 `categoryId` 即启用类别预警；批次台账 `GET /batches/{id}/ledger` 增
+`warningThresholdSnapshot` 段（创建时阈值快照与逐字段来源）。
+
+示例（根类基线 -> 子类只覆盖上限 -> 派车快照 -> 扫描）：
+
+```bash
+# 根类别“生物制品”：2~8℃，连续超限缓冲30分钟，抖动合并10分钟
+curl -u admin:admin123 -H 'Content-Type: application/json' \
+  -X POST http://localhost:8080/api/cold-chain/admin/categories \
+  -d '{"categoryName":"生物制品"}'
+
+curl -u admin:admin123 -H 'Content-Type: application/json' \
+  -X POST http://localhost:8080/api/cold-chain/admin/warning-templates \
+  -d '{"categoryId":1,"tempMin":2,"tempMax":8,"warnBufferMinutes":30,"jitterGapMinutes":10,
+       "changeReason":"生物制品通用冷链基线"}'
+
+# 子类别“疫苗”只覆盖上限为10℃，其余字段留空沿父链继承
+curl -u admin:admin123 -H 'Content-Type: application/json' \
+  -X POST http://localhost:8080/api/cold-chain/admin/categories \
+  -d '{"categoryName":"疫苗","parentId":1}'
+
+curl -u admin:admin123 -H 'Content-Type: application/json' \
+  -X POST http://localhost:8080/api/cold-chain/admin/warning-templates \
+  -d '{"categoryId":2,"tempMax":10,"changeReason":"疫苗仅放宽预警上限，其余继承"}'
+
+# 建档药品挂类别（此后派车自动固化 2~10℃/缓冲30/抖动10 的快照）
+curl -u dispatcher:dispatcher123 -H 'Content-Type: application/json' \
+  -X POST http://localhost:8080/api/cold-chain/drugs \
+  -d '{"drugName":"HPV疫苗","approvalNo":"国药准字S20200011","tempMin":2,"tempMax":8,
+       "packageSpec":"0.5ml/支","categoryId":2}'
+
+# 管理员查看/导出（非管理员返回 403）
+curl -u admin:admin123 http://localhost:8080/api/cold-chain/admin/warnings
+curl -u admin:admin123 -OJ http://localhost:8080/api/cold-chain/admin/warnings/export
+```
+
+### V5 验收
+
+`TempWarningTemplateIntegrationTest` 以真实 HTTP 入口（TestRestTemplate + Basic，Shiro 完整生效）
+驱动并用 Mapper 直查物理表，覆盖：类别阈值沿父链继承与字段级覆盖、缺字段/温区倒置停点、
+派车阈值快照逐字段落库、模板维护新版本只影响新建批次（旧批次仍按快照且已产生预警不消失）、
+按采样点连续超限时长判定、短暂抖动合并与长缺口（夹正常点）切断、未达缓冲不预警、
+定时任务重启重复扫描不多写（唯一键去重计数与物理行数双断言）、定时 `system`/手工 `admin`
+操作者不丢、匿名 401 与非管理员 403（列表/维护/导出/页面）、管理员 CSV 导出含操作者并写审计流水、
+无类别旧批次仍走 V1 自动异常但不产生类别预警。
