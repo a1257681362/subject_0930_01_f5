@@ -5,11 +5,13 @@ import com.evops.coldchain.CcConstants;
 import com.evops.coldchain.dto.DrugChangeRequest;
 import com.evops.coldchain.dto.DrugCreateRequest;
 import com.evops.coldchain.entity.Drug;
+import com.evops.coldchain.entity.DrugCategory;
 import com.evops.coldchain.entity.DrugVersion;
 import com.evops.coldchain.mapper.DrugMapper;
 import com.evops.coldchain.mapper.DrugVersionMapper;
 import com.evops.coldchain.mapper.SequenceMapper;
 import com.evops.common.BusinessException;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,6 +23,7 @@ import java.util.List;
  * 药品档案服务。
  * 核心规则：档案版本只追加——建档落 V1；变更把旧版本置 SUPERSEDED 并新增一行，
  * 旧版本的批准文号/温区/包装原值永不修改，已派车批次永远能按原版本核对。
+ * V5：药品可挂药品类别，类别温控预警模板在派车时按创建时快照固化。
  */
 @Service
 public class DrugService {
@@ -33,16 +36,25 @@ public class DrugService {
     private SequenceMapper sequenceMapper;
     @Resource
     private OpLogService opLogService;
+    // @Lazy：DrugCategoryService 也依赖药品 Mapper，延迟注入避免潜在循环依赖
+    @Resource
+    @Lazy
+    private DrugCategoryService categoryService;
 
     @Transactional
     public Drug create(DrugCreateRequest req) {
         validateRange(req.getTempMin(), req.getTempMax());
+        DrugCategory category = null;
+        if (req.getCategoryId() != null) {
+            category = categoryService.requireActiveCategory(req.getCategoryId());
+        }
 
         Drug drug = new Drug();
         drug.setDrugNo("YP" + sequenceMapper.nextDrugNo());
         drug.setDrugName(req.getDrugName());
         drug.setCurrentVersion(1);
         drug.setStatus(CcConstants.ACTIVE);
+        drug.setCategoryId(category == null ? null : category.getId());
         drug.setRemark(req.getRemark());
         drugMapper.insert(drug);
 
@@ -125,6 +137,29 @@ public class DrugService {
         return versionMapper.selectList(new QueryWrapper<DrugVersion>()
                 .eq("drug_id", drugId)
                 .orderByAsc("version_no"));
+    }
+
+    /**
+     * 把药品归组到类别（只影响此后新建批次）。
+     * 已派车/在途批次的预警模板快照在派车时已固化，归组/改挂不回写旧批次。
+     */
+    @Transactional
+    public Drug assignCategory(Long drugId, Long categoryId) {
+        Drug drug = requireDrug(drugId);
+        if (CcConstants.REVOKED.equals(drug.getStatus())) {
+            throw new BusinessException("档案已撤回，不能改挂类别");
+        }
+        DrugCategory category = categoryService.requireActiveCategory(categoryId);
+        Long old = drug.getCategoryId();
+        drug.setCategoryId(category.getId());
+        drugMapper.updateById(drug);
+
+        opLogService.log(CcConstants.ENT_DRUG, drugId, null, CcConstants.ACT_DRUG_ASSIGN_CATEGORY,
+                String.format("药品 %s(%s) 归组到类别[%s(%s)]（原类别=%s）；只影响此后新建批次，旧批次预警快照不变",
+                        drug.getDrugName(), drug.getDrugNo(),
+                        category.getCategoryName(), category.getCategoryNo(),
+                        old == null ? "无" : String.valueOf(old)));
+        return drug;
     }
 
     private void validateRange(BigDecimal min, BigDecimal max) {

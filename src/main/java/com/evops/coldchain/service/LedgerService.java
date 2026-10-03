@@ -65,6 +65,10 @@ public class LedgerService {
     private PermissionService permissionService;
     @Resource
     private OpLogService opLogService;
+    @Resource
+    private com.evops.coldchain.mapper.BatchAlertZoneSnapMapper alertSnapMapper;
+    @Resource
+    private com.evops.coldchain.mapper.TempAlertMapper tempAlertMapper;
 
     public Map<String, Object> batchLedger(Long batchId) {
         TransportBatch batch = batchMapper.selectById(batchId);
@@ -137,6 +141,15 @@ public class LedgerService {
         }
         ledger.put("temperatures", temps);
         ledger.put("exceptions", exceptionList);
+
+        // V5 温控预警：批次创建时固化的类别模板温区快照 + 本批次全部预警（只追加）
+        ledger.put("alertZone", batch.getAlertZoneCode());
+        ledger.put("alertZoneSnapshots", batch.getAlertZoneCode() == null
+                ? new ArrayList<>()
+                : alertSnapMapper.selectList(new QueryWrapper<com.evops.coldchain.entity.BatchAlertZoneSnap>()
+                        .eq("batch_id", batchId).orderByAsc("zone_code")));
+        ledger.put("tempAlerts", tempAlertMapper.selectList(new QueryWrapper<com.evops.coldchain.entity.TempAlert>()
+                .eq("batch_id", batchId).orderByAsc("id")));
 
         // 分仓交接（V4）：到仓箱数/责任主体/交接进度 + 每张交接单及其封签核验明细。
         // 原运输批次借此可追溯全部分仓节点，责任主体随交接提交转移。

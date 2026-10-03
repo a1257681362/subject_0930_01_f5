@@ -62,6 +62,10 @@ public final class CcConstants {
     public static final String ENT_HANDOVER = "HANDOVER";
     public static final String ENT_SEAL = "SEAL";
     public static final String ENT_PERMISSION = "PERMISSION";
+    // 药品类别 / 温控预警模板 / 温控预警（V5）
+    public static final String ENT_CATEGORY = "CATEGORY";
+    public static final String ENT_ALERT_TEMPLATE = "ALERT_TEMPLATE";
+    public static final String ENT_TEMP_ALERT = "TEMP_ALERT";
 
     // 校准凭证状态（VALID 有效 / VOID 作废；只追加 void* 字段，不删除原行）
     public static final String CERT_VALID = "VALID";
@@ -78,6 +82,30 @@ public final class CcConstants {
 
     // 冷链药品运输（分仓交接）权限键：FALSE=权限收紧，交接停止推进，已确认封签事实保留
     public static final String PERM_COLD_CHAIN_HANDOVER = "COLD_CHAIN_HANDOVER";
+
+    // —— V5 温控预警模板 / 预警 Shiro 权限点 ——
+    /** 查看（列表/详情/台账）温控预警 */
+    public static final String PERM_ALERT_VIEW = "coldchain:alert:view";
+    /** 导出温控预警 */
+    public static final String PERM_ALERT_EXPORT = "coldchain:alert:export";
+    /** 预警处理闭环 */
+    public static final String PERM_ALERT_RESOLVE = "coldchain:alert:resolve";
+    /** 药品类别与温控预警模板维护 */
+    public static final String PERM_TEMPLATE_MANAGE = "coldchain:template:manage";
+    /** 手动触发温控预警扫描（定时任务运维入口，仅管理员） */
+    public static final String PERM_ALERT_SCAN = "coldchain:alert:scan";
+
+    // 默认温区代码（未显式指定温区时按药品档案储存温区映射的默认温区）
+    public static final String ZONE_REFRIGERATE = "REFRIGERATE";
+    public static final String ZONE_REFRIGERATE_NAME = "冷藏温区";
+
+    // 连续超限计时状态（ACTIVE 连续超限中含抖动合并 / BROKEN 被超窗正常段断开）
+    public static final String STREAK_ACTIVE = "ACTIVE";
+    public static final String STREAK_BROKEN = "BROKEN";
+
+    // 温控预警状态（OPEN 待处理 / RESOLVED 已处理；只追加 resolve*，不随模板变更消失）
+    public static final String ALERT_OPEN = "OPEN";
+    public static final String ALERT_RESOLVED = "RESOLVED";
 
     // 操作动作
     public static final String ACT_CREATE = "CREATE";
@@ -111,4 +139,14 @@ public final class CcConstants {
     public static final String ACT_PERMISSION_RESTORE = "PERMISSION_RESTORE";
     // 一车货到达中转仓（交接前一个运输节点，登记到仓总箱数作为分箱平衡基准）
     public static final String ACT_ARRIVE = "ARRIVE";
+    // V5：类别建档/变更、预警模板维护、预警产生（系统扫描）、预警闭环
+    public static final String ACT_CATEGORY_CREATE = "CATEGORY_CREATE";
+    public static final String ACT_CATEGORY_CHANGE = "CATEGORY_CHANGE";
+    public static final String ACT_CATEGORY_REVOKE = "CATEGORY_REVOKE";
+    public static final String ACT_DRUG_ASSIGN_CATEGORY = "DRUG_ASSIGN_CATEGORY";
+    public static final String ACT_TEMPLATE_SAVE = "ALERT_TEMPLATE_SAVE";
+    public static final String ACT_ALERT_RAISE = "TEMP_ALERT_RAISE";
+    public static final String ACT_ALERT_SCAN = "TEMP_ALERT_SCAN";
+    public static final String ACT_ALERT_RESOLVE = "TEMP_ALERT_RESOLVE";
+    public static final String ACT_ALERT_EXPORT = "TEMP_ALERT_EXPORT";
 }

@@ -63,6 +63,9 @@ public class TransportBatch extends BaseEntity {
     /** 当前责任主体（驾驶员/接收人等具体责任人） */
     private String responsibleParty;
 
+    // —— V5 温控预警：派车时按药品储存温区从类别模板快照命中的温区代码（连续超限/预警按此温区）——
+    private String alertZoneCode;
+
     public String getBatchNo() { return batchNo; }
     public void setBatchNo(String batchNo) { this.batchNo = batchNo; }
     public Long getOrderId() { return orderId; }
@@ -133,4 +136,6 @@ public class TransportBatch extends BaseEntity {
     public void setResponsibleOrg(String responsibleOrg) { this.responsibleOrg = responsibleOrg; }
     public String getResponsibleParty() { return responsibleParty; }
     public void setResponsibleParty(String responsibleParty) { this.responsibleParty = responsibleParty; }
+    public String getAlertZoneCode() { return alertZoneCode; }
+    public void setAlertZoneCode(String alertZoneCode) { this.alertZoneCode = alertZoneCode; }
 }

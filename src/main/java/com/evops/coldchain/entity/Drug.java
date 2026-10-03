@@ -13,6 +13,8 @@ public class Drug extends BaseEntity {
     private Integer currentVersion;
     /** ACTIVE / REVOKED */
     private String status;
+    /** 药品类别ID（V5）：挂类别后按类别温控预警模板在派车时固化快照 */
+    private Long categoryId;
     private String remark;
 
     public String getDrugNo() { return drugNo; }
@@ -23,6 +25,8 @@ public class Drug extends BaseEntity {
     public void setCurrentVersion(Integer currentVersion) { this.currentVersion = currentVersion; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
+    public Long getCategoryId() { return categoryId; }
+    public void setCategoryId(Long categoryId) { this.categoryId = categoryId; }
     public String getRemark() { return remark; }
     public void setRemark(String remark) { this.remark = remark; }
 }

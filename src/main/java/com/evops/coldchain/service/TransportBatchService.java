@@ -74,6 +74,10 @@ public class TransportBatchService {
     @Resource
     private PermissionService permissionService;
     @Resource
+    private DrugCategoryService categoryService;
+    @Resource
+    private AlertEvaluationService alertEvaluationService;
+    @Resource
     private OpLogService opLogService;
 
     /** 派车：生成稳定批次号，固化档案快照，关联发货单与车辆 */
@@ -115,17 +119,27 @@ public class TransportBatchService {
         batch.setStatus(CcConstants.BATCH_DISPATCHED);
         batchMapper.insert(batch);
 
+        // V5 温控预警模板：批次落库拿到ID后，按药品类别解析生效模板（上级继承/本类别覆盖）
+        // 逐温区固化快照并命中本批次预警温区；此后类别/模板变更与本批次脱钩，旧批次永远用创建时快照。
+        String alertZoneCode = categoryService.snapshotForBatch(batch, version);
+        if (alertZoneCode != null) {
+            batch.setAlertZoneCode(alertZoneCode);
+            batchMapper.updateById(batch);
+        }
+
         // 发货单同步为已派车
         order.setStatus(CcConstants.ORDER_DISPATCHED);
         orderMapper.updateById(order);
 
         opLogService.log(CcConstants.ENT_BATCH, batch.getId(), batch.getId(), CcConstants.ACT_DISPATCH,
-                String.format("批次 %s 派车：发货单=%s，车辆=%s，按档案 V%d 快照（批准文号=%s，温区=%s~%s℃，包装=%s）%s",
+                String.format("批次 %s 派车：发货单=%s，车辆=%s，按档案 V%d 快照（批准文号=%s，温区=%s~%s℃，包装=%s）%s%s",
                         batch.getBatchNo(), order.getOrderNo(), vehicle.getPlateNo(),
                         version.getVersionNo(), version.getApprovalNo(),
                         version.getTempMin(), version.getTempMax(), version.getPackageSpec(),
                         req.getRouteId() == null ? ""
-                                : "；已指定运输路线，温区分段版本将在发运时按当时季节选定并逐段快照"));
+                                : "；已指定运输路线，温区分段版本将在发运时按当时季节选定并逐段快照",
+                        alertZoneCode == null ? ""
+                                : String.format("；温控预警模板已按药品类别创建时快照，本批次预警温区=%s", alertZoneCode)));
         return batch;
     }
 
@@ -264,6 +278,14 @@ public class TransportBatchService {
                 String.format("批次 %s 温度留痕：%s = %s℃（%s，%s；采集探头=%s）",
                         batch.getBatchNo(), req.getRecordTime(), req.getTemperature(), scope,
                         inRange ? "正常" : "越限", batch.getProbeSerialNoSnap()));
+
+        // V5：启用了类别温控预警模板（派车时固化到温区快照）的批次，连续超限/抖动合并/预警与
+        // 联动温度异常统一由预警引擎按“采样点 + 创建时快照”处理；模板后续变更不影响本批次。
+        if (alertEvaluationService.getBatchZone(batch.getId(), batch.getAlertZoneCode()) != null) {
+            // 刷新托管状态（markException 等场景拿到的是托管前实例）
+            alertEvaluationService.onTemperatureReported(batch, log);
+            return log;
+        }
 
         if (!inRange) {
             // 缓冲判定：同段连续越限（不含正常点打断）是否已超过缓冲时长
@@ -460,6 +482,9 @@ public class TransportBatchService {
         order.setStatus(CcConstants.ORDER_SIGNED);
         orderMapper.updateById(order);
 
+        // V5：批次闭环，关闭活动连续超限计时段（温度/已产生预警事实保留）
+        alertEvaluationService.closeStreaks(batch.getId());
+
         opLogService.log(CcConstants.ENT_BATCH, batch.getId(), batch.getId(), CcConstants.ACT_SIGN,
                 String.format("批次 %s 由 %s 签收闭环：按原档案 V%d 快照核对一致（批准文号=%s，包装=%s，数量=%d）%s；闭环时责任主体=%s/%s%s",
                         batch.getBatchNo(), req.getSignBy(), batch.getDrugVersionNo(),
@@ -492,6 +517,9 @@ public class TransportBatchService {
             order.setStatus(CcConstants.ORDER_REVOKED);
             orderMapper.updateById(order);
         }
+
+        // V5：批次作废，关闭活动连续超限计时段（温度/预警事实原样保留）
+        alertEvaluationService.closeStreaks(batch.getId());
 
         opLogService.log(CcConstants.ENT_BATCH, batch.getId(), batch.getId(), CcConstants.ACT_REVOKE,
                 "批次 " + batch.getBatchNo() + " 撤回作废（原始记录全部保留）。原因：" + req.getReason());

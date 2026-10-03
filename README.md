@@ -41,7 +41,8 @@ V2 另增路线温区分段四张表（见下节）与 `seq_cc_route_no` 序列�
 ### 接口（均在 `/api/cold-chain` 下，HTTP Basic 认证）
 
 内置账号：`dispatcher/dispatcher123`（调度）、`carrier/carrier123`（在途）、
-`receiver/receiver123`（签收）、`bootstrap/bootstrap`。
+`receiver/receiver123`（签收）、`admin/admin123`（冷链温控管理员，V5 预警查看/导出/模板维护）、
+`bootstrap/bootstrap`。
 
 | 动作 | 方法与路径 |
 | --- | --- |
@@ -307,3 +308,99 @@ curl -u dispatcher:dispatcher123 -H 'Content-Type: application/json' \
 权限收紧后建单/核验/提交/签收全部停止、页面显示收紧横幅但已确认封签事实保留、恢复后无需重核；
 作废释放箱数占用但封签/核验事实保留、封签号不可复用。
 
+
+## 冷链运输 V5：按药品类别的温控预警模板
+
+在 V1~V4 台账上增加“按药品类别树维护温控预警模板”：类别可继承上级温区阈值，也能在指定温区
+显式覆盖；模板修改只影响此后新建批次，旧批次始终按派车（创建）时快照判定；系统按采样点计算
+连续超限时长并合并短暂抖动，达到容忍时长产生追加式预警（不因模板变更消失）；预警查看/导出
+等均经过 Shiro 权限点校验；定时任务重启后增量幂等扫描，不多写记录、不丢操作者。
+
+### 核心规则
+
+- **类别树 + 模板按温区覆盖**：`t_cc_drug_category` 以 `parent_id` 自引用成树（防环）；每个
+  类别至多一份模板（`t_cc_alert_template`，维护即升版本），模板按温区行
+  （`t_cc_alert_template_zone`）给阈值（温区上下限、连续超限**容忍时长**、**短暂抖动合并窗**）。
+  温区行只追加：修改=旧行置 `SUPERSEDED` + 插入新生效行，历史原值永不修改。
+- **继承上级阈值 / 指定温区覆盖**：类别未显式配置某温区且 `inheritParent=TRUE` 时，沿类别链
+  向上继承最近一级已配置阈值（中间类别 `inheritParent=FALSE` 截断继续向上）；在指定温区显式
+  提交阈值即覆盖上级。解析结果中 `inherited` 标记是否继承、`source_category_*` 标明阈值来源类别。
+- **创建时快照，只影响新批次**：派车生成批次时按药品类别把解析后的生效模板逐温区固化到
+  `t_cc_batch_alert_zone_snap` 并按药品储存温区命中本批次预警温区（`alert_zone_code`）。
+  此后类别改名/移动、模板升版、阈值调整都与在途批次脱钩，旧批次的连续超限判定与预警追溯
+  一律以创建时快照为准（与档案快照、路线分段快照同一口径）。
+- **按采样点计算连续超限 + 短暂抖动合并**：每个采样点（批次在途探头全程唯一）按快照温区判定，
+  计时状态落在 `t_cc_alert_streak`（批次×温区一行）。采样点短暂回正常且正常间隔 **不超过**
+  模板“抖动合并窗”时视为抖动，连续超限合并、起点不变；超过合并窗才真正断开、新段重新计时。
+  连续超限持续**超过**容忍时长产生一条 `t_cc_temp_alert`（一次连续段只产一条），并联动一条
+  `TEMP_EXCURSION` 温度异常把批次挂起（沿用 V1 签收卡口）；预警记录段内峰值温度。
+- **预警只追加、不随模板变更消失**：预警触发时把温区/容忍/抖动窗/来源类别等阈值快照复制进
+  `t_cc_temp_alert`；闭环只追加 `resolve_*`（同时联动闭环对应温度异常），原描述不改、行不删，
+  后续模板如何修改，已产生预警都原样保留。唯一键 `(batch_id, zone_code, start_time)` 兜底重复。
+- **定时任务重启幂等、不丢操作者**：`AlertScanScheduler`（Spring `@Scheduled`，默认 60s）调用
+  扫描服务，扫描游标 `t_cc_alert_scan_cursor` 记录已纳入计算的最大温度留痕ID，重启后增量续算；
+  评估对每批做确定性重放（仅重建 streak 过程状态，不删温度/预警事实），因此**重启定时任务或
+  游标从头重放都不会多写**预警/温度异常/产生流水；定时线程无登录主体时操作者统一记 `system`。
+- **Shiro 权限校验**：Realm 升级为授权域并新增 `admin/admin123`。预警查看
+  `coldchain:alert:view`、导出 `coldchain:alert:export`、闭环 `coldchain:alert:resolve`、
+  手动扫描 `coldchain:alert:scan`、类别模板维护 `coldchain:template:manage` 逐路径校验；
+  未认证 401、已登录无权限 403。**管理员查看和导出都必须经过 Shiro 权限校验**，导出逐次写
+  审计流水。温度实时上报也走同一套评估（与上报同事务）。
+
+### 表结构增量（详见 schema.sql，版本标记 `cold-chain-5`）
+
+- 新增 `t_cc_drug_category`（类别树）、`t_cc_alert_template`（类别模板）、
+  `t_cc_alert_template_zone`（温区行，只追加）、`t_cc_batch_alert_zone_snap`（批次创建时快照）、
+  `t_cc_alert_streak`（连续超限计时状态）、`t_cc_temp_alert`（预警，只追加）、
+  `t_cc_alert_scan_cursor`（定时扫描游标），序列 `seq_cc_category_no`（类别号 `LB+8位`）。
+- `t_cc_drug` 增 `category_id`；`t_cc_transport_batch` 增 `alert_zone_code`；
+  `t_cc_exception` 增 `alert_id`（联动预警）。
+
+### 接口增量（仍在 `/api/cold-chain` 下，HTTP Basic）
+
+| 动作 | 方法与路径 | 权限 |
+| --- | --- | --- |
+| 类别建档 / 改名挂接 / 作废 | `POST /categories` / `POST /categories/{id}/change` / `POST /categories/{id}/revoke` | `coldchain:template:manage` |
+| 类别树列表 / 详情 | `GET /categories/tree` / `GET /categories/{id}` | `coldchain:alert:view` |
+| 维护类别预警模板（升版，携带要覆盖的温区） | `POST /categories/{id}/template` | `coldchain:template:manage` |
+| 模板详情（含沿链继承解析视图） | `GET /categories/{id}/template` | `coldchain:alert:view` |
+| 药品归组到类别 | `POST /drugs/{id}/category` | `coldchain:template:manage` |
+| 预警列表 / 详情 | `GET /alerts` / `GET /alerts/{id}` | `coldchain:alert:view` |
+| 预警处理闭环（联动闭环温度异常） | `POST /alerts/{id}/resolve` | `coldchain:alert:resolve` |
+| 导出预警 CSV（UTF-8 BOM，逐次留痕） | `GET /alerts/export` | `coldchain:alert:export` |
+| 手动触发一次扫描（同定时任务幂等逻辑） | `POST /alerts/scan` | `coldchain:alert:scan` |
+| 预警 + 类别模板管理页面 | `GET /ui/cold-chain/alerts` | `coldchain:alert:view` |
+
+建档时可直接带 `categoryId`；模板修改后只对新派车批次生效。示例（根类基线模板 + 子类继承）：
+
+```bash
+# 管理员建根类别并维护冷藏温区模板：2~8℃，连续超限容忍30分钟，短暂抖动合并窗10分钟
+curl -u admin:admin123 -H 'Content-Type: application/json' -X POST \
+  http://localhost:8080/api/cold-chain/categories -d '{"categoryName":"冷藏药品"}'
+
+curl -u admin:admin123 -H 'Content-Type: application/json' -X POST \
+  http://localhost:8080/api/cold-chain/categories/1/template \
+  -d '{"inheritParent":true,"changeReason":"夏季基线",
+       "zones":[{"zoneCode":"REFRIGERATE","zoneName":"冷藏温区","tempMin":2,"tempMax":8,
+                 "tolerateMinutes":30,"jitterGapMinutes":10}]}'
+
+# 建子类别（不配置温区即继承根类）；药品建档带 categoryId；之后正常 订单→派车→发运→温度上报
+curl -u admin:admin123 -H 'Content-Type: application/json' -X POST \
+  http://localhost:8080/api/cold-chain/categories \
+  -d '{"categoryName":"疫苗","parentId":1}'
+
+# 管理员导出预警（需导出权限，逐次写审计流水）
+curl -u admin:admin123 -OJ http://localhost:8080/api/cold-chain/alerts/export
+```
+
+定时任务可通过配置开关：`coldchain.alert-scan.enabled`（默认 `true`）、
+`coldchain.alert-scan.fixed-delay-ms`（默认 60000）、`initial-delay-ms`（默认 15000）。
+
+### V5 验收
+
+`CategoryAlertTemplateIntegrationTest` 以真实 HTTP 入口（TestRestTemplate + Basic）验证 Shiro
+权限（401/403/200、CSV BOM、导出留痕操作者），再用 Mapper 直查物理表，覆盖：
+类别阈值继承与指定温区覆盖、派车创建时快照（标明继承来源）、模板修改只影响新批次而旧批次快照
+与已产生预警不回写不消失、按采样点连续超限时长（短暂抖动≤合并窗合并且起点不变、对照超窗正常
+段打断重计）、一次连续段只产一条预警；以及**重启定时任务/扫描游标从头重放后“预警阈值按药品
+类别继承”不多写任何预警/异常/流水、操作者始终为 system 不丢**。

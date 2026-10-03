@@ -23,6 +23,8 @@ public class ExceptionEvent extends BaseEntity {
     private LocalDateTime resolveTime;
     /** 越限命中的路线分段序号（有路线分段时），便于追溯该段责任人 */
     private Integer segmentSeq;
+    /** V5：触发该温度异常的温控预警ID（预警闭环时一并闭环对应异常） */
+    private Long alertId;
 
     public Long getBatchId() { return batchId; }
     public void setBatchId(Long batchId) { this.batchId = batchId; }
@@ -42,4 +44,6 @@ public class ExceptionEvent extends BaseEntity {
     public void setResolveTime(LocalDateTime resolveTime) { this.resolveTime = resolveTime; }
     public Integer getSegmentSeq() { return segmentSeq; }
     public void setSegmentSeq(Integer segmentSeq) { this.segmentSeq = segmentSeq; }
+    public Long getAlertId() { return alertId; }
+    public void setAlertId(Long alertId) { this.alertId = alertId; }
 }
